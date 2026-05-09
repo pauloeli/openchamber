@@ -9,12 +9,14 @@ COPY packages/ui/package.json ./packages/ui/
 COPY packages/web/package.json ./packages/web/
 COPY packages/desktop/package.json ./packages/desktop/
 COPY packages/vscode/package.json ./packages/vscode/
-RUN bun install --frozen-lockfile --ignore-scripts
+RUN --mount=type=cache,target=/home/bun/.bun/install/cache \
+    bun install --ignore-scripts
 
 FROM deps AS builder
 WORKDIR /app
 COPY . .
-RUN bun run build:web
+RUN --mount=type=cache,target=/home/bun/.bun/install/cache \
+    bun run build:web
 
 FROM oven/bun:1 AS runtime
 WORKDIR /home/openchamber
