@@ -2144,6 +2144,10 @@ export async function commit(directory, message, options = {}) {
 }
 
 export async function getBranches(directory) {
+  if (!await isGitRepository(directory)) {
+    return { all: [], current: null, branches: {} };
+  }
+
   const git = await createGit(directory);
 
   try {
@@ -2164,7 +2168,9 @@ export async function getBranches(directory) {
       branches: result.branches
     };
   } catch (error) {
-    console.error('Failed to get branches:', error);
+    if (!isNotGitRepositoryError(error)) {
+      console.error('Failed to get branches:', error);
+    }
     throw error;
   }
 }
