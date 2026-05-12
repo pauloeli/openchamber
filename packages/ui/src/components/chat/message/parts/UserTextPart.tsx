@@ -20,14 +20,6 @@ const buildMentionUrl = (name: string): string => {
     return `https://opencode.ai/docs/agents/#${encoded}`;
 };
 
-const escapeHtml = (text: string): string => {
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#x27;');
-};
 
 const normalizeUserMessageRenderingMode = (mode: unknown): 'markdown' | 'plain' => {
     return mode === 'markdown' ? 'markdown' : 'plain';
@@ -96,20 +88,15 @@ const UserTextPart: React.FC<UserTextPartProps> = ({ part, messageId, agentMenti
         setIsExpanded(false);
     }, []);
 
+    // ReactMarkdown is XSS-safe by default and handles its own escaping internally.
+    // Applying escapeHtml before passing content to it causes double-encoding: characters
+    // like `"` become `&quot;` which ReactMarkdown renders as the literal string `&quot;`
+    // inside code blocks (where HTML entities are not interpreted).
+    // Agent mention links are rendered as plain text here since rehype-raw is not enabled
+    // and injected HTML strings would not be interpreted anyway.
     const processedMarkdownContent = React.useMemo(() => {
-        let content = textContent;
-
-        // Step 1: First escape HTML to protect against XSS and ensure HTML tags display as text
-        content = escapeHtml(content);
-
-        // Step 2: Then insert agent mention links (after escaping, so <a> tags won't be escaped)
-        if (agentMention?.token && content.includes(agentMention.token)) {
-            const mentionHtml = `<a href="${buildMentionUrl(agentMention.name)}" class="text-primary hover:underline" target="_blank" rel="noopener noreferrer">${agentMention.token}</a>`;
-            content = content.replace(agentMention.token, mentionHtml);
-        }
-
-        return content;
-    }, [agentMention, textContent]);
+        return textContent;
+    }, [textContent]);
 
     const plainTextContent = React.useMemo(() => {
         if (!agentMention?.token || !textContent.includes(agentMention.token)) {
