@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, powerMonitor, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, powerMonitor, session, shell, webContents } from 'electron';
 import contextMenu from 'electron-context-menu';
 import log from 'electron-log/main.js';
 import dgram from 'node:dgram';
@@ -785,6 +785,7 @@ const spawnLocalServer = async () => {
     attachSignals: false,
     exitOnShutdown: false,
     onDesktopNotification: (payload) => maybeShowNativeNotification(payload),
+    getIsWindowFocused: isAnyWindowFocused,
   });
 
   const port = handle.getPort();
@@ -1118,6 +1119,20 @@ const dispatchCheckForUpdates = () => {
   }
 };
 
+const reloadMenuTargetWindow = () => {
+  const target = getMenuTargetWindow();
+  if (!target || target.isDestroyed()) return;
+  target.webContents.reload();
+};
+
+const relaunchFromMenu = () => {
+  prepareForQuit();
+  setImmediate(() => {
+    app.relaunch();
+    app.exit(0);
+  });
+};
+
 const nextWindowLabel = () => {
   const value = state.windowCounter++;
   return value === 1 ? 'main' : `main-${value}`;
@@ -1166,6 +1181,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url }) => {
       backgroundThrottling: true,
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
       // sandbox must stay off: the preload uses contextBridge + ipcRenderer
       // from Electron's Node layer. contextIsolation + nodeIntegration:false
       // keep the renderer world walled off from Node. Do NOT flip to true —
@@ -1416,6 +1432,8 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
       backgroundThrottling: true,
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
+      // sandbox must stay off
       sandbox: false,
     },
   });
@@ -1843,6 +1861,21 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
 
     case 'desktop_get_app_version':
       return APP_VERSION;
+
+    case 'desktop_browser_capture_page': {
+      const wcId = Number.isFinite(args.webContentsId) ? Math.trunc(args.webContentsId) : null;
+      if (wcId === null || wcId < 0) throw new Error('webContentsId is required');
+      const wc = webContents.fromId(wcId);
+      if (!wc || wc.isDestroyed()) throw new Error('WebContents not found');
+      const image = await wc.capturePage();
+      const buffer = image.toJPEG(82);
+      return {
+        mime: 'image/jpeg',
+        base64: buffer.toString('base64'),
+        width: image.getSize().width,
+        height: image.getSize().height,
+      };
+    }
 
     case 'desktop_capture_page_rect': {
       if (!browserWindow || browserWindow.isDestroyed()) {
@@ -2388,6 +2421,8 @@ const buildMacMenu = () => {
         },
         { type: 'separator' },
         { label: 'Settings', accelerator: 'Cmd+,', click: () => dispatchAction('settings') },
+        { label: 'Reload Webview', click: () => reloadMenuTargetWindow() },
+        { label: 'Restart', click: () => relaunchFromMenu() },
         { label: 'Command Palette', accelerator: 'Cmd+P', click: () => dispatchAction('command-palette') },
         { type: 'separator' },
         { role: 'services' },
