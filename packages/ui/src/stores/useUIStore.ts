@@ -24,6 +24,7 @@ type ContextPanelTab = {
   targetPath: string | null;
   dedupeKey: string;
   label: string | null;
+  readOnly: boolean;
   touchedAt: number;
 };
 
@@ -32,6 +33,7 @@ type ContextPanelTabDescriptor = {
   targetPath?: string | null;
   dedupeKey?: string | null;
   label?: string | null;
+  readOnly?: boolean;
 };
 
 type ContextPanelDirectoryState = {
@@ -201,6 +203,7 @@ const createContextPanelTab = (descriptor: ContextPanelTabDescriptor): ContextPa
     targetPath: normalizedTargetPath,
     dedupeKey,
     label: normalizeContextTabLabel(descriptor.label),
+    readOnly: descriptor.readOnly === true,
     touchedAt: Date.now(),
   };
 };
@@ -239,6 +242,7 @@ const sanitizeContextPanelTabs = (tabs: unknown): ContextPanelTab[] => {
       targetPath?: unknown;
       dedupeKey?: unknown;
       label?: unknown;
+      readOnly?: unknown;
       touchedAt?: unknown;
     };
 
@@ -264,6 +268,7 @@ const sanitizeContextPanelTabs = (tabs: unknown): ContextPanelTab[] => {
       targetPath,
       dedupeKey,
       label: normalizeContextTabLabel(typeof candidate.label === 'string' ? candidate.label : null),
+      readOnly: candidate.readOnly === true,
       touchedAt: typeof candidate.touchedAt === 'number' && Number.isFinite(candidate.touchedAt)
         ? candidate.touchedAt
         : Date.now(),
@@ -491,6 +496,8 @@ interface UIStore {
   isBottomTerminalExpanded: boolean;
   bottomTerminalHeight: number;
   hasManuallyResizedBottomTerminal: boolean;
+  notesPanelHeight: number;
+  todoPanelHeight: number;
   isSessionSwitcherOpen: boolean;
   isSessionDropdownOpen: boolean;
   activeMainTab: MainTab;
@@ -519,6 +526,8 @@ interface UIStore {
   eventStreamStatus: EventStreamStatus;
   eventStreamHint: string | null;
   showReasoningTraces: boolean;
+  collapsibleThinkingBlocks: boolean;
+  groupReasoningBlocks: boolean;
   chatRenderMode: ChatRenderMode;
   activityRenderMode: ActivityRenderMode;
   showDeletionDialog: boolean;
@@ -575,6 +584,7 @@ interface UIStore {
 
   showTerminalQuickKeysOnDesktop: boolean;
   persistChatDraft: boolean;
+  showOpenCodeUpdateNotifications: boolean;
   inputSpellcheckEnabled: boolean;
   wideChatLayoutEnabled: boolean;
   showToolFileIcons: boolean;
@@ -619,6 +629,8 @@ interface UIStore {
   setBottomTerminalOpen: (open: boolean) => void;
   setBottomTerminalExpanded: (expanded: boolean) => void;
   setBottomTerminalHeight: (height: number) => void;
+  setNotesPanelHeight: (height: number) => void;
+  setTodoPanelHeight: (height: number) => void;
   setSessionSwitcherOpen: (open: boolean) => void;
   setSessionDropdownOpen: (open: boolean) => void;
   setActiveMainTab: (tab: MainTab) => void;
@@ -647,6 +659,7 @@ interface UIStore {
   setSettingsRemoteInstancesSelectedId: (instanceId: string | null) => void;
   setEventStreamStatus: (status: EventStreamStatus, hint?: string | null) => void;
   setShowReasoningTraces: (value: boolean) => void;
+  setCollapsibleThinkingBlocks: (value: boolean) => void;
   setChatRenderMode: (value: ChatRenderMode) => void;
   setActivityRenderMode: (value: ActivityRenderMode) => void;
   setShowDeletionDialog: (value: boolean) => void;
@@ -704,6 +717,7 @@ interface UIStore {
   setSummaryLength: (value: number) => void;
   setMaxLastMessageLength: (value: number) => void;
   setPersistChatDraft: (value: boolean) => void;
+  setShowOpenCodeUpdateNotifications: (value: boolean) => void;
   setInputSpellcheckEnabled: (value: boolean) => void;
   setWideChatLayoutEnabled: (value: boolean) => void;
   setShowToolFileIcons: (value: boolean) => void;
@@ -750,6 +764,8 @@ export const useUIStore = create<UIStore>()(
         isBottomTerminalExpanded: false,
         bottomTerminalHeight: 300,
         hasManuallyResizedBottomTerminal: false,
+        notesPanelHeight: 112,
+        todoPanelHeight: 259,
         isSessionSwitcherOpen: false,
         isSessionDropdownOpen: false,
         activeMainTab: 'chat',
@@ -776,6 +792,8 @@ export const useUIStore = create<UIStore>()(
         eventStreamStatus: 'idle',
         eventStreamHint: null,
         showReasoningTraces: true,
+        collapsibleThinkingBlocks: true,
+        groupReasoningBlocks: true,
         chatRenderMode: 'live',
         activityRenderMode: 'summary',
         showDeletionDialog: true,
@@ -828,6 +846,7 @@ export const useUIStore = create<UIStore>()(
 
         showTerminalQuickKeysOnDesktop: false,
         persistChatDraft: true,
+        showOpenCodeUpdateNotifications: true,
         inputSpellcheckEnabled: false,
         wideChatLayoutEnabled: false,
         showToolFileIcons: true,
@@ -1278,6 +1297,14 @@ export const useUIStore = create<UIStore>()(
           set({ bottomTerminalHeight: height, hasManuallyResizedBottomTerminal: true });
         },
 
+        setNotesPanelHeight: (height) => {
+          set({ notesPanelHeight: height });
+        },
+
+        setTodoPanelHeight: (height) => {
+          set({ todoPanelHeight: height });
+        },
+
         setSessionSwitcherOpen: (open) => {
           set({ isSessionSwitcherOpen: open });
         },
@@ -1410,6 +1437,10 @@ export const useUIStore = create<UIStore>()(
 
         setShowReasoningTraces: (value) => {
           set({ showReasoningTraces: value });
+        },
+
+        setCollapsibleThinkingBlocks: (value) => {
+          set({ collapsibleThinkingBlocks: value });
         },
 
         setChatRenderMode: (value) => {
@@ -1847,6 +1878,9 @@ export const useUIStore = create<UIStore>()(
         setPersistChatDraft: (value) => {
           set({ persistChatDraft: value });
         },
+        setShowOpenCodeUpdateNotifications: (value) => {
+          set({ showOpenCodeUpdateNotifications: value });
+        },
         setInputSpellcheckEnabled: (value) => {
           set({ inputSpellcheckEnabled: value });
         },
@@ -1935,12 +1969,22 @@ export const useUIStore = create<UIStore>()(
       {
         name: 'ui-store',
         storage: createJSONStorage(() => getSafeStorage()),
-        version: 8,
+        version: 9,
         migrate: (persistedState, version) => {
           if (!persistedState || typeof persistedState !== 'object') {
             return persistedState;
           }
           const state = persistedState as Record<string, unknown>;
+
+          // v8 -> v9: initialize notes/todo panel height fields
+          if (version < 9) {
+            if (typeof state.notesPanelHeight !== 'number' || !Number.isFinite(state.notesPanelHeight)) {
+              state.notesPanelHeight = 112;
+            }
+            if (typeof state.todoPanelHeight !== 'number' || !Number.isFinite(state.todoPanelHeight)) {
+              state.todoPanelHeight = 259;
+            }
+          }
 
           // v0 -> v1: reset legacy notification templates
           if (version < 1) {
@@ -2026,6 +2070,8 @@ export const useUIStore = create<UIStore>()(
           isBottomTerminalOpen: state.isBottomTerminalOpen,
           isBottomTerminalExpanded: state.isBottomTerminalExpanded,
           bottomTerminalHeight: state.bottomTerminalHeight,
+          notesPanelHeight: state.notesPanelHeight,
+          todoPanelHeight: state.todoPanelHeight,
           isSessionSwitcherOpen: state.isSessionSwitcherOpen,
           activeMainTab: state.activeMainTab,
           sidebarSection: state.sidebarSection,
@@ -2036,6 +2082,7 @@ export const useUIStore = create<UIStore>()(
           isSessionCreateDialogOpen: state.isSessionCreateDialogOpen,
           // Note: isSettingsDialogOpen intentionally NOT persisted
           showReasoningTraces: state.showReasoningTraces,
+          collapsibleThinkingBlocks: state.collapsibleThinkingBlocks,
           chatRenderMode: state.chatRenderMode,
           activityRenderMode: state.activityRenderMode,
           showDeletionDialog: state.showDeletionDialog,
@@ -2073,6 +2120,7 @@ export const useUIStore = create<UIStore>()(
           summaryLength: state.summaryLength,
           maxLastMessageLength: state.maxLastMessageLength,
           persistChatDraft: state.persistChatDraft,
+          showOpenCodeUpdateNotifications: state.showOpenCodeUpdateNotifications,
           inputSpellcheckEnabled: state.inputSpellcheckEnabled,
           wideChatLayoutEnabled: state.wideChatLayoutEnabled,
           showToolFileIcons: state.showToolFileIcons,

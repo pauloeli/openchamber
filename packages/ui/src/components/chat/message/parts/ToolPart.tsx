@@ -1,5 +1,6 @@
 
 import React from 'react';
+import { animate, type AnimationPlaybackControls } from 'motion';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 import { PatchDiff } from '@pierre/diffs/react';
 import { cn } from '@/lib/utils';
@@ -187,26 +188,29 @@ const LiveDuration: React.FC<{ start: number; end?: number; active: boolean }> =
     return <>{formatDuration(start, end, now)}</>;
 };
 
-const useDeferredExpandedContent = (isExpanded: boolean) => {
-    const [shouldRender, setShouldRender] = React.useState(false);
+const EXPANDED_CONTENT_TRANSITION_MS = 350;
+const EXPANDED_CONTENT_SPRING = { type: 'spring' as const, visualDuration: 0.35, bounce: 0 };
+
+const useAnimatedExpandedContent = (isExpanded: boolean) => {
+    const [shouldRender, setShouldRender] = React.useState(isExpanded);
 
     React.useEffect(() => {
-        if (!isExpanded) {
-            setShouldRender(false);
-            return;
-        }
-
         if (typeof window === 'undefined') {
+            setShouldRender(isExpanded);
+            return;
+        }
+
+        if (isExpanded) {
             setShouldRender(true);
             return;
         }
 
-        const frame = window.requestAnimationFrame(() => {
-            setShouldRender(true);
-        });
+        const timer = window.setTimeout(() => {
+            setShouldRender(false);
+        }, EXPANDED_CONTENT_TRANSITION_MS);
 
         return () => {
-            window.cancelAnimationFrame(frame);
+            window.clearTimeout(timer);
         };
     }, [isExpanded]);
 
@@ -1080,8 +1084,11 @@ const TaskToolSummary: React.FC<{
     isActive?: boolean;
 }> = ({ entries, isExpanded, isMobile, output, sessionId, onShowPopup, input, animateTailText = true, isActive = false }) => {
     const { t } = useI18n();
+    const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
     const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
+    const openContextPanelTab = useUIStore((state) => state.openContextPanelTab);
     const showToolFileIcons = useUIStore((state) => state.showToolFileIcons);
+    const runtime = React.useContext(RuntimeAPIContext);
     const displayEntries = entries;
 
     const trimmedOutput = typeof output === 'string'
@@ -1092,8 +1099,18 @@ const TaskToolSummary: React.FC<{
 
     const handleOpenSession = (event: React.MouseEvent) => {
         event.stopPropagation();
-        if (sessionId) {
-            setCurrentSession(sessionId);
+        if (sessionId && currentDirectory) {
+            if (isMobile || runtime?.runtime.isVSCode) {
+                setCurrentSession(sessionId, currentDirectory);
+                return;
+            }
+
+            openContextPanelTab(currentDirectory, {
+                mode: 'chat',
+                dedupeKey: `session:${sessionId}`,
+                label: agentType.charAt(0).toUpperCase() + agentType.slice(1),
+                readOnly: true,
+            });
         }
     };
 
@@ -1272,6 +1289,16 @@ type DiffPatchEntry = {
 
 const hasUnifiedDiffHunk = (patch: string): boolean => /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/m.test(patch);
 
+const isUnifiedFileHeaderPair = (minusLine: string, plusLine: string): boolean => {
+    if (!minusLine.startsWith('--- ') || !plusLine.startsWith('+++ ')) {
+        return false;
+    }
+
+    const oldPath = minusLine.slice(4).trim();
+    const newPath = plusLine.slice(4).trim();
+    return oldPath.length > 0 && newPath.length > 0;
+};
+
 const getUnifiedDiffPath = (patch: string, fallbackTitle: string): string => {
     const plusHeader = patch.match(/^\+\+\+\s+(?:[ab]\/(.+)|(.+))$/m);
     const rawPath = plusHeader?.[1] ?? plusHeader?.[2];
@@ -1293,9 +1320,7 @@ const splitUnifiedDiffPatch = (patch: string): DiffPatchEntry[] => {
     for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index] ?? '';
         const nextLine = lines[index + 1] ?? '';
-        const isUnifiedFileHeader = /^---\s+(?:[ab]\/|\/dev\/null|\/)/.test(line)
-            && /^\+\+\+\s+(?:[ab]\/|\/dev\/null|\/)/.test(nextLine);
-        if (line.startsWith('diff --git ') || line.startsWith('Index: ') || isUnifiedFileHeader) {
+        if (line.startsWith('diff --git ') || line.startsWith('Index: ') || isUnifiedFileHeaderPair(line, nextLine)) {
             starts.push(index);
         }
     }
@@ -1353,20 +1378,20 @@ const renderPathLikeGitChanges = (path: string, grow = true) => {
     );
 };
 
-const renderAnimatedPathWithIcon = (path: string, _animate = true, grow = true, showFileIcons = true) => {
-    void _animate;
+const renderAnimatedPathWithIcon = (path: string, animate = true, grow = true, showFileIcons = true) => {
     const lastSlash = path.lastIndexOf('/');
 
     if (lastSlash === -1) {
         return (
             <span className={cn('min-w-0 inline-flex items-center gap-1 overflow-hidden', grow && 'flex-1')} title={path}>
                 {showFileIcons ? <FileTypeIcon filePath={path} className="h-3.5 w-3.5 flex-shrink-0" /> : null}
-                <span
+                <Text
+                    variant={animate ? 'generate-effect' : 'static'}
                     className={cn('min-w-0 truncate whitespace-nowrap typography-meta', grow && 'flex-1')}
                     style={{ color: 'var(--tools-title)' }}
                 >
                     {path}
-                </span>
+                </Text>
             </span>
         );
     }
@@ -1393,9 +1418,13 @@ const renderAnimatedPathWithIcon = (path: string, _animate = true, grow = true, 
                     {displayDir}
                 </span>
                 <span className="flex-shrink-0" style={{ color: 'var(--tools-description)' }}>/</span>
-                <span className="flex-shrink-0" style={{ color: 'var(--tools-title)' }}>
+                <Text
+                    variant={animate ? 'generate-effect' : 'static'}
+                    className="flex-shrink-0"
+                    style={{ color: 'var(--tools-title)' }}
+                >
                     {name}
-                </span>
+                </Text>
             </span>
         </span>
     );
@@ -1416,7 +1445,8 @@ const getDiffPatchEntries = (
 
             const record = file as { relativePath?: unknown; filePath?: unknown; patch?: unknown; diff?: unknown };
             const patch = getPatchText(record.patch) ?? getPatchText(record.diff) ?? '';
-            if (!patch || !hasUnifiedDiffHunk(patch)) {
+            const splitPatchEntries = splitUnifiedDiffPatch(patch);
+            if (!patch || splitPatchEntries.length === 0) {
                 return null;
             }
 
@@ -1430,12 +1460,13 @@ const getDiffPatchEntries = (
                 ? getRelativePath(rawPath, currentDirectory)
                 : `File ${index + 1}`;
 
-            return {
-                id: `${title}-${index}`,
-                title,
-                patch,
-            } satisfies DiffPatchEntry;
+            return splitPatchEntries.map((entry, splitIndex) => ({
+                id: `${title}-${index}-${splitIndex}`,
+                title: splitPatchEntries.length === 1 ? title : getRelativePath(entry.title, currentDirectory),
+                patch: entry.patch,
+            } satisfies DiffPatchEntry));
         })
+        .flat()
         .filter((entry): entry is DiffPatchEntry => entry !== null);
 
     if (entries.length > 0) {
@@ -1888,15 +1919,77 @@ const ToolPart: React.FC<ToolPartProps> = ({
 
     const onContentChangeRef = React.useRef(onContentChange);
     onContentChangeRef.current = onContentChange;
+    const expandedContentRef = React.useRef<HTMLDivElement>(null);
+    const expandedContentAnimationRef = React.useRef<AnimationPlaybackControls | null>(null);
+    const expandedContentMountedRef = React.useRef(false);
 
-    React.useEffect(() => {
-        if (!shouldNotifyStructuralChange) {
+    React.useLayoutEffect(() => {
+        if (isTaskTool) {
             return;
         }
-        if (typeof isExpanded === 'boolean') {
-            onContentChangeRef.current?.('structural');
+
+        const element = expandedContentRef.current;
+        if (!element) {
+            return;
         }
-    }, [isExpanded, shouldNotifyStructuralChange]);
+
+        expandedContentAnimationRef.current?.stop();
+
+        if (!expandedContentMountedRef.current) {
+            expandedContentMountedRef.current = true;
+            element.style.height = isExpanded ? 'auto' : '0px';
+            element.style.opacity = isExpanded ? '1' : '0';
+            element.style.overflow = isExpanded ? 'visible' : 'hidden';
+            return;
+        }
+
+        element.style.overflow = 'hidden';
+
+        if (isExpanded) {
+            element.style.height = '0px';
+            element.style.opacity = '0';
+        } else {
+            element.style.height = `${element.scrollHeight}px`;
+            element.style.opacity = '1';
+        }
+
+        const animation = animate(
+            element,
+            { height: isExpanded ? 'auto' : '0px', opacity: isExpanded ? 1 : 0 },
+            EXPANDED_CONTENT_SPRING,
+        );
+        expandedContentAnimationRef.current = animation;
+
+        void animation.finished.then(() => {
+            if (expandedContentAnimationRef.current !== animation) {
+                return;
+            }
+            expandedContentAnimationRef.current = null;
+            if (isExpanded) {
+                element.style.overflow = 'visible';
+                element.style.height = 'auto';
+            } else {
+                element.style.overflow = 'hidden';
+            }
+            if (shouldNotifyStructuralChange) {
+                onContentChangeRef.current?.('structural');
+            }
+        }).catch(() => undefined);
+
+        return () => {
+            animation.stop();
+            if (expandedContentAnimationRef.current === animation) {
+                expandedContentAnimationRef.current = null;
+            }
+        };
+    }, [isExpanded, isTaskTool, shouldNotifyStructuralChange]);
+
+    React.useEffect(() => {
+        return () => {
+            expandedContentAnimationRef.current?.stop();
+            expandedContentAnimationRef.current = null;
+        };
+    }, []);
 
     const stateWithData = state as ToolStateWithMetadata;
     const metadata = stateWithData.metadata;
@@ -2518,7 +2611,7 @@ const ToolPart: React.FC<ToolPartProps> = ({
 
     const iconStyle = !isTaskTool && isError ? TOOL_ERROR_ICON_STYLE : TOOL_NORMAL_ICON_STYLE;
     const titleStyle = !isTaskTool && isError ? TOOL_ERROR_TITLE_STYLE : TOOL_NORMAL_TITLE_STYLE;
-    const shouldRenderExpandedContent = useDeferredExpandedContent(isExpanded);
+    const shouldRenderExpandedContent = useAnimatedExpandedContent(isExpanded);
 
     if (!shouldTreatAsFinalized && !isActive && !isTaskTool) {
         return null;
@@ -2662,20 +2755,33 @@ const ToolPart: React.FC<ToolPartProps> = ({
                 />
             ) : null}
 
-            {!isTaskTool && shouldRenderExpandedContent ? (
-                <div className="relative ml-2 pl-3">
-                    <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute left-0 top-px bottom-0 w-px"
-                        style={{ backgroundColor: 'var(--tools-border)' }}
-                    />
-                    <ToolExpandedContent
-                        part={part}
-                        state={state}
-                        syntaxTheme={syntaxTheme}
-                        currentDirectory={currentDirectory}
-                        onShowPopup={onShowPopup}
-                    />
+            {!isTaskTool ? (
+                <div
+                    ref={expandedContentRef}
+                    aria-hidden={!isExpanded}
+                    style={{
+                        height: isExpanded ? 'auto' : '0px',
+                        opacity: isExpanded ? 1 : 0,
+                        overflow: isExpanded ? 'visible' : 'hidden',
+                        overflowAnchor: 'none',
+                    }}
+                >
+                    {shouldRenderExpandedContent ? (
+                        <div className="relative ml-2 pl-3">
+                            <span
+                                aria-hidden="true"
+                                className="pointer-events-none absolute left-0 top-px bottom-0 w-px"
+                                style={{ backgroundColor: 'var(--tools-border)' }}
+                            />
+                            <ToolExpandedContent
+                                part={part}
+                                state={state}
+                                syntaxTheme={syntaxTheme}
+                                currentDirectory={currentDirectory}
+                                onShowPopup={onShowPopup}
+                            />
+                        </div>
+                    ) : null}
                 </div>
             ) : null}
         </div>

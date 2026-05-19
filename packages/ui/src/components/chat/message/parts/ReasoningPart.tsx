@@ -1,26 +1,19 @@
 import React from 'react';
+import { animate, type AnimationPlaybackControls } from 'motion';
 import type { Part } from '@opencode-ai/sdk/v2';
 import { cn } from '@/lib/utils';
 import type { ContentChangeReason } from '@/hooks/useChatAutoFollow';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
-import { Icon } from "@/components/icon/Icon";
-import type { IconName } from "@/components/icon/icons";
+import { Icon } from '@/components/icon/Icon';
+import { BusyDots } from './BusyDots';
+import { useI18n } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
-import { useDurationTickerNow } from './useDurationTicker';
 import { MarkdownRenderer } from '../../MarkdownRenderer';
 import { useStreamingTextThrottle } from '../../hooks/useStreamingTextThrottle';
 
 type PartWithText = Part & { text?: string; content?: string; time?: { start?: number; end?: number } };
 
 export type ReasoningVariant = 'thinking' | 'justification';
-
-const variantConfig: Record<
-    ReasoningVariant,
-    { label: string; Icon: IconName }
-> = {
-    thinking: { label: 'Thinking', Icon: 'brain-ai-3' },
-    justification: { label: 'Justification', Icon: 'chat-ai-3' },
-};
 
 const cleanReasoningText = (text: string): string => {
     if (typeof text !== 'string' || text.trim().length === 0) {
@@ -35,39 +28,47 @@ const cleanReasoningText = (text: string): string => {
         .trim();
 };
 
+const SUMMARY_MAX_CHARS = 80;
+const INLINE_THRESHOLD = 120;
+const EXPANDED_CONTENT_SPRING = { type: 'spring' as const, visualDuration: 0.35, bounce: 0 };
+
+/** Strip common markdown syntax so the header preview reads as plain text. */
+const stripMarkdown = (text: string): string =>
+    text
+        // Fenced code blocks → keep inner text on one line
+        .replace(/```[\w]*\n?([\s\S]*?)```/g, (_, inner: string) => inner.trim())
+        // Inline code
+        .replace(/`([^`]+)`/g, '$1')
+        // Bold + italic (*** / __)
+        .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+        .replace(/_{1,3}([^_]+)_{1,3}/g, '$1')
+        // Headings (# ## ###)
+        .replace(/^#{1,6}\s+/gm, '')
+        // Links [label](url) → label
+        .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+        // Blockquote markers
+        .replace(/^>\s?/gm, '')
+        // Horizontal rules
+        .replace(/^[-*_]{3,}\s*$/gm, '')
+        // Remaining leading/trailing punctuation from stripped markers
+        .trim();
+
 const getReasoningSummary = (text: string): string => {
     if (!text) {
         return '';
     }
 
-    const trimmed = text.trim();
-    const newlineIndex = trimmed.indexOf('\n');
-    const periodIndex = trimmed.indexOf('.');
+    // Strip markdown, then collapse all whitespace runs into single spaces.
+    const flat = stripMarkdown(text).replace(/\s+/g, ' ').trim();
 
-    const cutoffCandidates = [
-        newlineIndex >= 0 ? newlineIndex : Infinity,
-        periodIndex >= 0 ? periodIndex : Infinity,
-    ];
-    const cutoff = Math.min(...cutoffCandidates);
-
-    if (!Number.isFinite(cutoff)) {
-        return trimmed;
+    if (flat.length <= SUMMARY_MAX_CHARS) {
+        return flat;
     }
 
-    return trimmed.substring(0, cutoff).trim();
-};
-
-const formatDuration = (start: number, end?: number, now: number = Date.now()): string => {
-    const duration = end ? end - start : now - start;
-    const seconds = duration / 1000;
-    const displaySeconds = seconds < 0.05 && end !== undefined ? 0.1 : seconds;
-    return `${displaySeconds.toFixed(1)}s`;
-};
-
-const LiveDuration: React.FC<{ start: number; end?: number; active: boolean }> = ({ start, end, active }) => {
-    const now = useDurationTickerNow(active, 250);
-
-    return <>{formatDuration(start, end, now)}</>;
+    // Cut at a word boundary before the limit, then append ellipsis.
+    const cut = flat.lastIndexOf(' ', SUMMARY_MAX_CHARS);
+    const end = cut > 0 ? cut : SUMMARY_MAX_CHARS;
+    return `${flat.substring(0, end).trimEnd()}…`;
 };
 
 type ReasoningTimelineBlockProps = {
@@ -79,7 +80,8 @@ type ReasoningTimelineBlockProps = {
     showDuration?: boolean;
     isStreaming?: boolean;
     actions?: React.ReactNode;
-    alwaysShowActions?: boolean;
+    /** Override the initial expanded state. Defaults to `isStreaming`. */
+    defaultExpanded?: boolean;
 };
 
 export const ReasoningTimelineBlock: React.FC<ReasoningTimelineBlockProps> = ({
@@ -87,18 +89,47 @@ export const ReasoningTimelineBlock: React.FC<ReasoningTimelineBlockProps> = ({
     variant,
     onContentChange,
     blockId,
-    time,
-    showDuration = true,
     isStreaming = false,
     actions,
-    alwaysShowActions = false,
+    defaultExpanded,
 }) => {
-    const [isExpanded, setIsExpanded] = React.useState(false);
+    const { t } = useI18n();
+    const [isExpanded, setIsExpanded] = React.useState(defaultExpanded ?? isStreaming);
+    const contentId = React.useId();
+    const scrollRef = React.useRef<HTMLElement>(null);
+    const contentRef = React.useRef<HTMLDivElement>(null);
+    const contentAnimationRef = React.useRef<AnimationPlaybackControls | null>(null);
+    const contentMountedRef = React.useRef(false);
+    // Track previous isStreaming so the effect only collapses on true→false
+    // transitions and does NOT override defaultExpanded on initial mount.
+    const prevIsStreamingRef = React.useRef(isStreaming);
 
     const summary = React.useMemo(() => getReasoningSummary(text), [text]);
-    const { label, Icon: iconName } = variantConfig[variant];
-    const timeStart = typeof time?.start === 'number' && Number.isFinite(time.start) ? time.start : undefined;
-    const timeEnd = typeof time?.end === 'number' && Number.isFinite(time.end) ? time.end : undefined;
+    const toggleAriaLabel = isExpanded
+        ? t('chat.reasoningTrace.collapseAria')
+        : t('chat.reasoningTrace.expandAria');
+
+    const handleToggle = React.useCallback(() => {
+        setIsExpanded((prev) => !prev);
+        onContentChange?.('structural');
+    }, [onContentChange]);
+
+    const handleKeyDown = React.useCallback((event: React.KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handleToggle();
+        }
+    }, [handleToggle]);
+
+    React.useEffect(() => {
+        const wasStreaming = prevIsStreamingRef.current;
+        prevIsStreamingRef.current = isStreaming;
+        // Auto-collapse only when streaming ends (true → false).
+        // Do not fire on mount so that defaultExpanded is respected.
+        if (wasStreaming && !isStreaming) {
+            setIsExpanded(false);
+        }
+    }, [isStreaming]);
 
     React.useEffect(() => {
         if (text.trim().length === 0) {
@@ -107,70 +138,204 @@ export const ReasoningTimelineBlock: React.FC<ReasoningTimelineBlockProps> = ({
         onContentChange?.('structural');
     }, [onContentChange, text]);
 
+    React.useEffect(() => {
+        if (isStreaming && isExpanded && scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+    }, [text, isStreaming, isExpanded]);
+
+    React.useLayoutEffect(() => {
+        const element = contentRef.current;
+        if (!element) {
+            return;
+        }
+
+        contentAnimationRef.current?.stop();
+
+        if (!contentMountedRef.current) {
+            contentMountedRef.current = true;
+            element.style.height = isExpanded ? 'auto' : '0px';
+            element.style.opacity = isExpanded ? '1' : '0';
+            element.style.overflow = isExpanded ? 'visible' : 'hidden';
+            return;
+        }
+
+        element.style.overflow = 'hidden';
+
+        if (isExpanded) {
+            element.style.height = '0px';
+            element.style.opacity = '0';
+        } else {
+            element.style.height = `${element.scrollHeight}px`;
+            element.style.opacity = '1';
+        }
+
+        const animation = animate(
+            element,
+            { height: isExpanded ? 'auto' : '0px', opacity: isExpanded ? 1 : 0 },
+            EXPANDED_CONTENT_SPRING,
+        );
+        contentAnimationRef.current = animation;
+
+        void animation.finished.then(() => {
+            if (contentAnimationRef.current !== animation) {
+                return;
+            }
+            contentAnimationRef.current = null;
+            if (isExpanded) {
+                element.style.overflow = 'visible';
+                element.style.height = 'auto';
+            } else {
+                element.style.overflow = 'hidden';
+            }
+        }).catch(() => undefined);
+
+        return () => {
+            animation.stop();
+            if (contentAnimationRef.current === animation) {
+                contentAnimationRef.current = null;
+            }
+        };
+    }, [isExpanded]);
+
+    React.useEffect(() => {
+        return () => {
+            contentAnimationRef.current?.stop();
+            contentAnimationRef.current = null;
+        };
+    }, []);
+
     if (!text || text.trim().length === 0) {
         return null;
+    }
+
+    const isShort = !isStreaming && text.trim().length < INLINE_THRESHOLD;
+
+    // Short blocks: render content directly without a collapsible toggle.
+    if (isShort) {
+        return (
+            <div className="my-1" data-reasoning-block-id={blockId} data-message-text-export-root="true">
+                <div data-message-text-export-source="true">
+                    <MarkdownRenderer
+                        content={text}
+                        messageId={blockId}
+                        isAnimated={false}
+                        isStreaming={false}
+                        variant="reasoning"
+                    />
+                </div>
+                {actions ? (
+                    <div className="mt-2 mb-1 flex items-center justify-start gap-1.5" data-message-actions="true">
+                        <div className="flex items-center gap-1.5" data-message-action-group="true">
+                            {actions}
+                        </div>
+                    </div>
+                ) : null}
+            </div>
+        );
     }
 
     return (
         <div className="my-1" data-reasoning-block-id={blockId} data-message-text-export-root="true">
             <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={isExpanded}
+                aria-controls={contentId}
+                aria-label={toggleAriaLabel}
                 className={cn(
-                    'group/tool flex items-center gap-2 pr-2 pl-px py-1.5 rounded-xl cursor-pointer'
+                    'group/tool flex gap-1.5 pr-2 pl-px py-2 rounded-xl cursor-pointer items-center',
                 )}
-                onClick={() => setIsExpanded((prev) => !prev)}
+                onClick={handleToggle}
+                onKeyDown={handleKeyDown}
             >
-                <div className="flex items-center gap-2 flex-shrink-0">
-                    <div className="relative h-3.5 w-3.5 flex-shrink-0">
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <div className="relative h-3.5 w-3.5 flex-shrink-0 cursor-pointer">
                         <div
                             className={cn(
                                 'absolute inset-0 transition-opacity',
                                 isExpanded && 'opacity-0',
-                                !isExpanded && (alwaysShowActions ? 'opacity-0' : 'group-hover/tool:opacity-0')
+                                !isExpanded && 'group-hover/tool:opacity-0',
                             )}
+                            style={{ color: 'var(--tools-icon)' }}
                         >
-                            <Icon name={iconName} className="h-3.5 w-3.5" />
+                            <Icon name="brain-ai-3" className="h-3.5 w-3.5" />
                         </div>
                         <div
                             className={cn(
                                 'absolute inset-0 transition-opacity flex items-center justify-center',
                                 isExpanded && 'opacity-100',
-                                !isExpanded && (alwaysShowActions ? 'opacity-100' : 'opacity-0 group-hover/tool:opacity-100')
+                                !isExpanded && 'opacity-0 group-hover/tool:opacity-100',
                             )}
+                            style={{ color: 'var(--tools-icon)' }}
                         >
                             {isExpanded ? <Icon name="arrow-down-s" className="h-3.5 w-3.5" /> : <Icon name="arrow-right-s" className="h-3.5 w-3.5" />}
                         </div>
                     </div>
-                    <span className="typography-meta font-medium">{label}</span>
+
+                    {isStreaming ? (
+                        <span className="flex items-center gap-1 typography-meta font-medium" style={{ color: 'var(--tools-title)' }}>
+                            <span>{t(variant === 'justification' ? 'chat.reasoningTrace.justification' : 'chat.reasoningTrace.thinking')}</span>
+                            <BusyDots />
+                        </span>
+                    ) : isExpanded ? (
+                        <span
+                            className="typography-meta font-medium"
+                            style={{ color: 'var(--tools-title)' }}
+                        >
+                            {t(variant === 'justification' ? 'chat.reasoningTrace.justification' : 'chat.reasoningTrace.thinking')}
+                        </span>
+                    ) : (
+                        <span
+                            className="typography-meta font-medium"
+                            style={{ color: 'var(--tools-title)' }}
+                        >
+                            {t(variant === 'justification' ? 'chat.reasoningTrace.justification' : 'chat.reasoningTrace.thinking')}
+                        </span>
+                    )}
                 </div>
 
-                {(summary || (showDuration && typeof timeStart === 'number')) ? (
-                    <div className="flex items-center gap-1 flex-1 min-w-0 typography-meta text-muted-foreground/70">
-                        {summary ? <span className="flex-1 min-w-0 truncate">{summary}</span> : null}
-                        {showDuration && typeof timeStart === 'number' ? (
-                            <span className="relative flex-shrink-0 tabular-nums text-right">
-                                <span className="text-muted-foreground/80 transition-opacity duration-150">
-                                    <LiveDuration
-                                        start={timeStart}
-                                        end={timeEnd}
-                                        active={typeof timeEnd !== 'number'}
-                                    />
-                                </span>
-                            </span>
-                        ) : null}
-                    </div>
-                ) : null}
+                <div className="flex items-center gap-1 flex-1 min-w-0 typography-meta" style={{ color: 'var(--tools-description)' }}>
+                    {!isStreaming && !isExpanded && summary ? (
+                        <span
+                            className="min-w-0 truncate typography-meta"
+                            style={{ color: 'var(--tools-description)', opacity: 0.8 }}
+                            title={summary}
+                        >
+                            {summary}
+                        </span>
+                    ) : (
+                        <span className="min-w-0 flex-1" />
+                    )}
+                </div>
             </div>
 
-            {isExpanded && (
-                <div
-                    className={cn(
-                        'relative pr-2 pb-2 pt-2 pl-4'
-                    )}
-                >
+            {/* Expanded content — keep mounted so auto-collapse can animate smoothly. */}
+            <div
+                ref={contentRef}
+                id={contentId}
+                aria-hidden={!isExpanded}
+                style={{
+                    height: isExpanded ? 'auto' : '0px',
+                    opacity: isExpanded ? 1 : 0,
+                    overflow: isExpanded ? 'visible' : 'hidden',
+                    overflowAnchor: 'none',
+                }}
+            >
+                <div className="relative ml-2 pl-3 pb-1 pt-0.5">
+                    <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute left-0 top-0 bottom-0 w-px"
+                        style={{ backgroundColor: 'var(--tools-border)' }}
+                    />
                     <ScrollableOverlay
+                        ref={scrollRef}
                         as="div"
                         outerClassName="max-h-80"
                         className="p-0"
+                        useScrollShadow
+                        scrollShadowSize={36}
+                        userIntentOnly
                     >
                         <div data-message-text-export-source="true">
                             <MarkdownRenderer
@@ -190,7 +355,7 @@ export const ReasoningTimelineBlock: React.FC<ReasoningTimelineBlockProps> = ({
                         ) : null}
                     </ScrollableOverlay>
                 </div>
-            )}
+            </div>
         </div>
     );
 };
@@ -199,14 +364,12 @@ type ReasoningPartProps = {
     part: Part;
     onContentChange?: (reason?: ContentChangeReason) => void;
     messageId: string;
-    alwaysShowActions?: boolean;
 };
 
 const ReasoningPart = React.memo(({
     part,
     onContentChange,
     messageId,
-    alwaysShowActions = false,
 }: ReasoningPartProps) => {
     const chatRenderMode = useUIStore((state) => state.chatRenderMode);
     const partWithText = part as PartWithText;
@@ -233,9 +396,84 @@ const ReasoningPart = React.memo(({
             onContentChange={onContentChange}
             blockId={part.id || `${messageId}-reasoning`}
             time={time}
-            showDuration={chatRenderMode !== 'sorted'}
             isStreaming={isStreaming}
-            alwaysShowActions={alwaysShowActions}
+        />
+    );
+});
+
+type MergedReasoningPartProps = {
+    parts: Part[];
+    onContentChange?: (reason?: ContentChangeReason) => void;
+    messageId: string;
+};
+
+/**
+ * Renders ALL reasoning parts for a message as a single collapsible block,
+ * merging their text and spanning their combined time range.
+ * This matches the VSCode Copilot pattern of showing one "Thought" block per turn.
+ */
+export const MergedReasoningPart = React.memo(({
+    parts,
+    onContentChange,
+    messageId,
+}: MergedReasoningPartProps) => {
+    const chatRenderMode = useUIStore((state) => state.chatRenderMode);
+
+    const mergedText = React.useMemo(() => {
+        return parts
+            .map((part) => {
+                const p = part as PartWithText;
+                return cleanReasoningText(p.text || p.content || '');
+            })
+            .filter((t) => t.length > 0)
+            .join('\n\n');
+    }, [parts]);
+
+    const mergedTime = React.useMemo(() => {
+        let earliestStart: number | undefined;
+        let latestEnd: number | undefined;
+
+        for (const part of parts) {
+            const time = (part as PartWithText).time;
+            if (typeof time?.start === 'number' && Number.isFinite(time.start)) {
+                if (earliestStart === undefined || time.start < earliestStart) {
+                    earliestStart = time.start;
+                }
+            }
+            if (typeof time?.end === 'number' && Number.isFinite(time.end)) {
+                if (latestEnd === undefined || time.end > latestEnd) {
+                    latestEnd = time.end;
+                }
+            }
+        }
+
+        return earliestStart !== undefined ? { start: earliestStart, end: latestEnd } : undefined;
+    }, [parts]);
+
+    const isStreaming = chatRenderMode === 'live' && parts.some(
+        (part) => typeof (part as PartWithText).time?.end !== 'number',
+    );
+
+    const throttledMergedText = useStreamingTextThrottle({
+        text: mergedText,
+        isStreaming,
+        identityKey: `${messageId}:reasoning-merged`,
+    });
+
+    const blockId = parts[0]?.id ?? `${messageId}-reasoning-merged`;
+
+    if (!throttledMergedText.trim()) {
+        return null;
+    }
+
+    return (
+        <ReasoningTimelineBlock
+            text={throttledMergedText}
+            variant="thinking"
+            onContentChange={onContentChange}
+            blockId={blockId}
+            time={mergedTime}
+            isStreaming={isStreaming}
         />
     );
 });
