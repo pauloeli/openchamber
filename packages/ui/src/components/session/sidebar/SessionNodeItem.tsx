@@ -32,6 +32,7 @@ import { useI18n } from '@/lib/i18n';
 import { parseMultiRunSessionTitle } from '@/lib/multirun/title';
 import { MultiRunFusionDialog } from '@/components/multirun/MultiRunFusionDialog';
 import { FusionIcon } from '@/components/icons/FusionIcon';
+import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
 
 type Folder = { id: string; name: string; sessionIds: string[] };
 
@@ -61,7 +62,7 @@ type Props = {
   handleCancelEdit: () => void;
   toggleParent: (expansionKey: string) => void;
   handleSessionSelect: (sessionId: string, sessionDirectory: string | null, isMissingDirectory: boolean, projectId?: string | null) => void;
-  handleSessionDoubleClick: () => void;
+  handleSessionDoubleClick: (sessionId: string, sessionTitle: string) => void;
   togglePinnedSession: (sessionId: string) => void;
   handleShareSession: (session: Session) => void;
   copiedSessionId: string | null;
@@ -261,22 +262,29 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
   const isMinimalMode = displayMode === 'minimal';
   const isVSCode = React.useMemo(() => isVSCodeRuntime(), []);
   const isElectron = React.useMemo(() => canUseElectronDesktopIPC(), []);
+  const runtimeApis = React.useContext(RuntimeAPIContext);
   const revealOnHoverClass = isVSCode
     ? 'group-hover:opacity-100 group-hover:pointer-events-auto'
     : 'group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto';
   const hideOnHoverClass = isVSCode
     ? 'group-hover:opacity-0'
     : 'group-hover:opacity-0 group-focus-within:opacity-0';
+  const showOpenInEditorAction = isVSCode;
   const showQuickArchiveAction = !archivedBucket && !mobileVariant;
   const revealPaddingClass = isMinimalMode
     ? (isVSCode
         ? 'group-hover:pr-2'
         : 'group-hover:pr-2 group-focus-within:pr-2')
     : (isVSCode
-        ? (showQuickArchiveAction ? 'group-hover:pr-12' : 'group-hover:pr-5')
+        ? (showQuickArchiveAction && showOpenInEditorAction
+            ? 'group-hover:pr-18'
+            : showQuickArchiveAction || showOpenInEditorAction
+              ? 'group-hover:pr-12'
+              : 'group-hover:pr-5')
         : (showQuickArchiveAction ? 'group-hover:pr-12 group-focus-within:pr-12' : 'group-hover:pr-5 group-focus-within:pr-5'));
   const alwaysActionPaddingClass = showQuickArchiveAction ? 'pr-13' : 'pr-7';
   const suppressNextSelectRef = React.useRef(false);
+  const editCancelledRef = React.useRef(false);
   const [isTouchPressed, setIsTouchPressed] = React.useState(false);
 
   const session = node.session;
@@ -463,12 +471,20 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {
                   event.stopPropagation();
+                  editCancelledRef.current = true;
                   handleCancelEdit();
                   return;
                 }
                 if (event.key === ' ' || event.key === 'Enter') {
                   event.stopPropagation();
                 }
+              }}
+              onBlur={() => {
+                if (editCancelledRef.current) {
+                  editCancelledRef.current = false;
+                  return;
+                }
+                handleSaveEdit();
               }}
             />
             <button
@@ -607,6 +623,22 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
     event.stopPropagation();
     setOpenSidebarMenuKey(null);
     handleDeleteSession(session, { archivedBucket });
+  };
+
+  const handleOpenInEditorPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleOpenInEditorMouseDown = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleOpenInEditorClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void runtimeApis?.vscode?.executeCommand('openchamber.openSessionInEditor', session.id, sessionTitle);
   };
 
   const handleRowSelect = (event?: React.MouseEvent<HTMLButtonElement>) => {
@@ -801,7 +833,7 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
 	                    onClick={(event) => handleRowSelect(event)}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
-                      handleSessionDoubleClick();
+                      handleSessionDoubleClick(session.id, sessionTitle);
                     }}
                     className={cn(
 	                      'flex min-w-0 flex-1 cursor-pointer flex-col gap-0 overflow-hidden rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 text-foreground select-none disabled:cursor-not-allowed transition-[padding]',
@@ -865,7 +897,7 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
 	                onClick={(event) => handleRowSelect(event)}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
-                  handleSessionDoubleClick();
+                  handleSessionDoubleClick(session.id, sessionTitle);
                 }}
                 className={cn(
 	                  'flex min-w-0 flex-1 cursor-pointer flex-col gap-0 overflow-hidden rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 text-foreground select-none disabled:cursor-not-allowed transition-[padding]',
@@ -933,6 +965,29 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
                 </TooltipTrigger>
                 <TooltipContent side="left" sideOffset={8}>
                   {t('sessions.sidebar.bulkActions.archive')}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
+            {showOpenInEditorAction ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      'inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-opacity',
+                      isMinimalMode && !alwaysShowActions ? 'h-4 w-4' : 'h-6 w-6',
+                    )}
+                    aria-label={t('sessions.sidebar.session.actions.openInEditor')}
+                    onPointerDown={handleOpenInEditorPointerDown}
+                    onMouseDown={handleOpenInEditorMouseDown}
+                    onClick={handleOpenInEditorClick}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <Icon name="external-link" className={cn(isMinimalMode && !alwaysShowActions ? 'h-2.5 w-2.5' : 'h-3.5 w-3.5')} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left" sideOffset={8}>
+                  {t('sessions.sidebar.session.actions.openInEditor')}
                 </TooltipContent>
               </Tooltip>
             ) : null}

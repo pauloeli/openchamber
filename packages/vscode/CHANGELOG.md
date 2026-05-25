@@ -1,3 +1,37 @@
+## [1.11.6] - 2026-05-25
+
+- Settings/Plugins: added a Plugins page for managing opencode plugins, with npm update checks and user/project scopes (thanks to @Quat3rnion).
+- Perf: Git repository lookups in the extension now avoid repeating the same Git read commands during refreshes.
+
+## [1.11.5] - 2026-05-25
+
+- Chat/Input: pending image attachments now show previews, sent image attachments can be cited from assistant messages, and markdown source mode highlights formatting while you type.
+- Chat: queued messages now send to the session they were queued from, even if you switch sessions before they are sent.
+- Chat/UI: chats keep following the latest response after final task summaries, activity reasoning no longer flashes before settling, and assistant timestamps stay visible on narrow layouts.
+- Settings/Skills: installed skills are discovered more accurately, skill files opened from tool messages now load correctly, and snippet names keep their canonical casing (thanks to @jkker, @isanchez404).
+- Voice: OpenAI-compatible custom speech providers can now use API keys (thanks to @yangyaofei).
+
+## [1.11.4] - 2026-05-22
+
+- Sessions: switching between chat sessions now keeps less inactive message history in the webview, especially after opening large conversations.
+- Sessions: opening a session now fetches a smaller initial message page, while still expanding enough to show the latest user turn when needed.
+- Chat: task tool results use final task summaries when available instead of repeatedly loading child-session messages.
+- Chat: task tool polling in the extension now uses smaller message fetches while subtasks are active or idle.
+- Chat: markdown file links now cap path checks in the extension, reducing stalls in messages with many inline paths.
+- Chat: the extension header reads only the active session title and latest usage data instead of reacting to the full session list.
+
+## [1.11.3] - 2026-05-19
+
+- Editor Integration: Add to Context now attaches the selected code as context instead of pasting a formatted block into the input.
+- Editor Integration: Add File to Chat now attaches selected files instead of inserting file mentions.
+- Editor Integration: Add to Context, Add File to Chat, Explain, and Improve Code now target the active session editor when one is open.
+- Chat: session editor tabs now update their title to match the session title.
+- Sessions: session rows now include an action to open a chat as editor tab.
+- Notifications: completion, question, and permission notifications now use the extension notification settings and shows as multi-platforn native notifications.
+- Chat: question cards now include copy buttons for Markdown and JSON (thanks to @robertoberto).
+- Chat: slash command autocomplete now includes skills and clearer command/type badges.
+- Usage: added Wafer.ai quota tracking (thanks to @bowber).
+
 ## [1.11.2] - 2026-05-18
 
 - Chat: thinking blocks can now be collapsed, and expanding tool details feels smooth (thanks to @ermanhavuc).
@@ -363,7 +397,7 @@
 ## [1.5.9] - 2026-01-28
 
 - Agent Manager: migrated to the OpenCode SDK worktree implementation; sessions in worktrees are now completely isolated.
-- Agent Manager: worktree setup commands are now persistant per project and automatically saved/restored.
+- Agent Manager: worktree setup commands are now persistent per project and automatically saved/restored.
 
 
 ## [1.5.8] - 2026-01-26
