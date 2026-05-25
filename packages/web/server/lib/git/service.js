@@ -161,13 +161,13 @@ const getGitBinary = () => resolveGitBinary();
  */
 function escapeSshKeyPath(sshKeyPath) {
   const isWindows = process.platform === 'win32';
-  
+
   // Normalize path first on Windows (convert backslashes to forward slashes)
   let normalizedPath = sshKeyPath;
   if (isWindows) {
     normalizedPath = sshKeyPath.replace(/\\/g, '/');
   }
-  
+
   // Validate: reject paths with characters that could enable injection
   // Allow only alphanumeric, path separators, dots, dashes, underscores, spaces, and colons (for Windows drives)
   // Note: backslash is not in this list since we've already normalized Windows paths
@@ -184,7 +184,7 @@ function escapeSshKeyPath(sshKeyPath) {
     if (driveMatch) {
       unixPath = `/${driveMatch[1].toLowerCase()}${unixPath.slice(2)}`;
     }
-    
+
     // Use single quotes for the path (prevents shell interpretation)
     return `'${unixPath}'`;
   } else {
@@ -1526,7 +1526,7 @@ export async function getStatus(directory, options = {}) {
         .raw(['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'])
         .then(() => true)
         .catch(() => false);
-      
+
       if (mergeHeadExists) {
         const mergeHead = await git.raw(['rev-parse', 'MERGE_HEAD']).catch(() => '');
         const headSha = mergeHead.trim().slice(0, 7);
@@ -1550,15 +1550,15 @@ export async function getStatus(directory, options = {}) {
       const rebaseApplyPath = await resolveGitInternalPath(repoRoot, git, 'rebase-apply').catch(() => '');
       const rebaseMergeExists = rebaseMergePath ? await fsp.stat(rebaseMergePath).then(() => true).catch(() => false) : false;
       const rebaseApplyExists = rebaseApplyPath ? await fsp.stat(rebaseApplyPath).then(() => true).catch(() => false) : false;
-      
+
       if (rebaseMergeExists || rebaseApplyExists) {
         const rebasePath = rebaseMergeExists ? rebaseMergePath : rebaseApplyPath;
         const headName = await fsp.readFile(path.join(rebasePath, 'head-name'), 'utf8').catch(() => '');
         const onto = await fsp.readFile(path.join(rebasePath, 'onto'), 'utf8').catch(() => '');
-        
+
         const headNameTrimmed = headName.trim().replace('refs/heads/', '');
         const ontoTrimmed = onto.trim().slice(0, 7);
-        
+
         // Only set rebaseInProgress if we have valid data
         if (headNameTrimmed || ontoTrimmed) {
           rebaseInProgress = {
@@ -2453,8 +2453,6 @@ export async function getBranches(directory) {
   if (!await isGitRepository(directory)) {
     return { all: [], current: null, branches: {} };
   }
-
-  // const git = await createGit(directory);
 
   try {
     const result = await git.branch();
@@ -3423,7 +3421,7 @@ export async function getRemotes(directory) {
 
   try {
     const remotes = await git.getRemotes(true);
-    
+
     return remotes.map((remote) => ({
       name: remote.name,
       fetchUrl: remote.refs.fetch,
@@ -3475,7 +3473,7 @@ export async function rebase(directory, options = {}) {
     };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();
-    const isConflict = errorMessage.includes('conflict') || 
+    const isConflict = errorMessage.includes('conflict') ||
                        errorMessage.includes('could not apply') ||
                        errorMessage.includes('merge conflict');
 
@@ -3523,7 +3521,7 @@ export async function merge(directory, options = {}) {
     };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();
-    const isConflict = errorMessage.includes('conflict') || 
+    const isConflict = errorMessage.includes('conflict') ||
                        errorMessage.includes('merge conflict') ||
                        errorMessage.includes('automatic merge failed');
 
@@ -3563,7 +3561,7 @@ export async function continueRebase(directory) {
     return { success: true, conflict: false };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();
-    const isConflict = errorMessage.includes('conflict') || 
+    const isConflict = errorMessage.includes('conflict') ||
                        errorMessage.includes('needs merge') ||
                        errorMessage.includes('unmerged') ||
                        errorMessage.includes('fix conflicts');
@@ -3614,7 +3612,7 @@ export async function continueMerge(directory) {
     return { success: true, conflict: false };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();
-    const isConflict = errorMessage.includes('conflict') || 
+    const isConflict = errorMessage.includes('conflict') ||
                        errorMessage.includes('needs merge') ||
                        errorMessage.includes('unmerged') ||
                        errorMessage.includes('fix conflicts');
