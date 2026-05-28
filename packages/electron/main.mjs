@@ -44,6 +44,9 @@ const shouldStartInBackground = (loginItemSettings = readLoginItemSettings()) =>
 // Set the product name early so electron-log derives its log directory as
 // ~/Library/Logs/OpenChamber/ (not ~/Library/Logs/@openchamber/electron/).
 app.setName('OpenChamber');
+if (isDev) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'OpenChamber Dev'));
+}
 app.setAppUserModelId(APP_USER_MODEL_ID);
 app.commandLine.appendSwitch('proxy-bypass-list', '<-loopback>');
 
@@ -484,6 +487,7 @@ const writeWindowState = async (browserWindow) => {
 
   const bounds = browserWindow.getBounds();
   await mutateSettingsRoot((root) => {
+    if (!browserWindow || browserWindow.isDestroyed()) return root;
     root.desktopWindowState = {
       x: bounds.x,
       y: bounds.y,
@@ -1315,7 +1319,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url }) => {
         `--openchamber-boot-outcome=${JSON.stringify(state.bootOutcome || null)}`,
       ],
       preload: isDev ? path.join(__dirname, 'preload.mjs') : path.join(app.getAppPath(), 'preload.mjs'),
-      backgroundThrottling: true,
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
@@ -1587,7 +1591,7 @@ const createMiniChatWindow = async ({ mode, sessionId = '', directory = '', proj
         `--openchamber-macos-major=${desktopMacosMajor}`,
       ],
       preload: isDev ? path.join(__dirname, 'preload.mjs') : path.join(app.getAppPath(), 'preload.mjs'),
-      backgroundThrottling: true,
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
