@@ -391,7 +391,6 @@ const getNormalizedMessageForDisplay = (message: ChatMessageEntry): ChatMessageE
 
 interface MessageListProps {
     sessionKey: string;
-    turnStart: number;
     disableStaging?: boolean;
     messages: ChatMessageEntry[];
     sessionIsWorking?: boolean;
@@ -405,9 +404,7 @@ interface MessageListProps {
     } | null;
     onMessageContentChange: (reason?: ContentChangeReason) => void;
     getAnimationHandlers: (messageId: string) => AnimationHandlers;
-    hasMoreAbove: boolean;
     isLoadingOlder: boolean;
-    onLoadOlder: () => void;
     scrollToBottom?: () => void;
     scrollRef?: React.RefObject<HTMLDivElement | null>;
 }
@@ -1005,15 +1002,9 @@ const StaticHistoryList = React.memo(({ entries, shouldVirtualize, virtualRows, 
     }
 
     if (virtualRows.length === 0 && entries.length > 0) {
-        const fallbackStart = Math.max(0, entries.length - MESSAGE_LIST_OVERSCAN * 2);
-        const fallbackEntries = entries.slice(fallbackStart);
-        const fallbackHeight = fallbackEntries.reduce((total, entry) => total + estimateHistoryEntryHeight(entry), 0);
-        const fallbackPaddingTop = Math.max(0, totalSize - fallbackHeight);
-
         return (
             <div ref={contentRef} className="relative w-full">
-                {fallbackPaddingTop > 0 ? <div aria-hidden="true" style={{ height: `${fallbackPaddingTop}px` }} /> : null}
-                {fallbackEntries.map((entry) => (
+                {entries.map((entry) => (
                     <div
                         key={entry.key}
                         data-turn-entry={entry.key}
@@ -1107,8 +1098,7 @@ StreamingTailContent.displayName = 'StreamingTailContent';
 
 const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({ 
     sessionKey,
-    turnStart,
-    disableStaging: _disableStaging,
+    disableStaging = false,
     messages,
     sessionIsWorking = false,
     activeStreamingMessageId = null,
@@ -1116,14 +1106,11 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
     retryOverlay = null,
     onMessageContentChange,
     getAnimationHandlers,
-    hasMoreAbove,
     isLoadingOlder,
-    onLoadOlder,
     scrollToBottom,
     scrollRef,
 }, ref) => {
     streamPerfCount('ui.message_list.render');
-    void _disableStaging;
     const stickyUserHeader = useUIStore(state => state.stickyUserHeader);
     const chatRenderMode = useUIStore((state) => state.chatRenderMode);
     const activityRenderMode = useUIStore((state) => state.activityRenderMode);
@@ -1135,7 +1122,6 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
         animatedIds: Set<string>;
     }>({ sessionKey: undefined, previousOrder: [], animatedIds: new Set() });
     const stableGetAnimationHandlers = useStableEvent(getAnimationHandlers);
-    const stableOnLoadOlder = useStableEvent(onLoadOlder);
     const stableScrollToBottom = useStableEvent(() => {
         scrollToBottom?.();
     });
@@ -1320,7 +1306,7 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
 
         const grew = currentLen > previousLen;
         const firstChanged = previousFirstKey !== currentFirstKey;
-        if (!shouldVirtualizeHistory || !grew || !firstChanged || previousLen === 0) {
+        if (!shouldVirtualizeHistory || isLoadingOlder || disableStaging || !grew || !firstChanged || previousLen === 0) {
             return;
         }
 
@@ -1379,36 +1365,9 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
         if (!shouldVirtualizeHistory) {
             return;
         }
-        const scrollEl = resolveScrollContainer();
-        const prevTotal = historyVirtualizer.getTotalSize();
-        const nearBottom = scrollEl && prevTotal > 0
-            ? scrollEl.scrollTop + scrollEl.clientHeight >= prevTotal - 10
-            : false
 
         historyVirtualizer.measure();
-
-        // measure() defers via useAnimationFrameWithResizeObserver.
-        // Wait two frames then, if we were near the estimated bottom, scroll
-        // to the real bottom after measurements settle.
-        let frame2: number | null = null;
-        const frame1 = requestAnimationFrame(() => {
-            frame2 = requestAnimationFrame(() => {
-                if (!nearBottom) return
-                const el = resolveScrollContainer()
-                if (!el) return
-                const target = Math.max(0, el.scrollHeight - el.clientHeight)
-                if (target > 0 && Math.abs(el.scrollTop - target) > 5) {
-                    el.scrollTop = target
-                }
-            })
-        })
-        return () => {
-            cancelAnimationFrame(frame1)
-            if (frame2 !== null) {
-                cancelAnimationFrame(frame2)
-            }
-        }
-    }, [historyVirtualizer, resolveScrollContainer, shouldVirtualizeHistory]);
+    }, [historyEntries.length, historyVirtualizer, shouldVirtualizeHistory]);
 
     const scheduleVirtualMeasure = React.useCallback(() => {
         if (!shouldVirtualizeHistory) {
@@ -1673,7 +1632,7 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                 if (!applyAnchor()) {
                     const index = messageIndexMap.get(anchor.messageId);
                     if (typeof index === 'number' && index < historyEntries.length) {
-                        scrollHistoryIndexIntoView(index, 'auto');
+                        return scrollHistoryIndexIntoView(index, 'auto');
                     }
                 }
 
@@ -1709,24 +1668,6 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
 
     return (
         <div>
-                {(turnStart > 0 || hasMoreAbove) && (
-                    <div className="flex justify-center py-3">
-                        {isLoadingOlder ? (
-                            <span className="text-xs uppercase tracking-wide text-muted-foreground/80">
-                                Loading…
-                            </span>
-                        ) : (
-                            <button
-                                type="button"
-                                onClick={stableOnLoadOlder}
-                                className="text-xs uppercase tracking-wide text-muted-foreground/80 hover:text-foreground"
-                            >
-                                Load older messages
-                            </button>
-                        )}
-                    </div>
-                )}
-
                 <FadeInDisabledProvider disabled={disableFadeIn}>
                     <div className="relative w-full">
                         <StaticHistoryList
