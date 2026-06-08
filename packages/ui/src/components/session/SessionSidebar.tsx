@@ -69,7 +69,13 @@ import {
   formatProjectLabel,
   normalizePath,
 } from './sidebar/utils';
-import { mergeSessionDirectoryMetadata, refreshGlobalSessions, resolveGlobalSessionDirectory, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
+import {
+  mergeSessionDirectoryMetadata,
+  refreshGlobalSessions,
+  refreshGlobalSessionsForDirectories,
+  resolveGlobalSessionDirectory,
+  useGlobalSessionsStore,
+} from '@/stores/useGlobalSessionsStore';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useGitHubAuthStore } from '@/stores/useGitHubAuthStore';
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
@@ -794,6 +800,36 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     [normalizedProjects],
   );
 
+  const projectSessionDirectories = React.useMemo(() => {
+    const directories = new Set<string>();
+    normalizedProjects.forEach((project) => {
+      if (project.normalizedPath) directories.add(project.normalizedPath);
+      const worktrees = availableWorktreesByProject.get(project.normalizedPath) ?? [];
+      worktrees.forEach((worktree) => {
+        const directory = normalizePath(worktree.path);
+        if (directory) directories.add(directory);
+      });
+    });
+    return [...directories].sort();
+  }, [availableWorktreesByProject, normalizedProjects]);
+
+  const knownProjectSessionDirectoriesRef = React.useRef<Set<string> | null>(null);
+  React.useEffect(() => {
+    const nextDirectories = new Set(projectSessionDirectories);
+    const previousDirectories = knownProjectSessionDirectoriesRef.current;
+    knownProjectSessionDirectoriesRef.current = nextDirectories;
+    if (!previousDirectories) {
+      return;
+    }
+
+    const addedDirectories = projectSessionDirectories.filter((directory) => !previousDirectories.has(directory));
+    if (addedDirectories.length === 0) {
+      return;
+    }
+
+    void refreshGlobalSessionsForDirectories(addedDirectories, syncSessionsSnapshotRef.current);
+  }, [projectSessionDirectories]);
+
   const { github } = useRuntimeAPIs();
   const githubAuthStatus = useGitHubAuthStore((state) => state.status);
   const githubAuthChecked = useGitHubAuthStore((state) => state.hasChecked);
@@ -812,6 +848,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   const isSessionsLoading = useSessionUIStore((state) => state.isLoading);
   useSessionFolderCleanup({
     isSessionsLoading,
+    hasLoadedGlobalSessions,
     sessions,
     archivedSessions,
     normalizedProjects,
@@ -1679,10 +1716,10 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
             setSessionSwitcherOpen(false);
           }
           if (options?.sessionId) {
-            setCurrentSession(options.sessionId);
+            setCurrentSession(options.sessionId, worktreePath);
             return;
           }
-          openNewSessionDraft({ directoryOverride: worktreePath });
+          openNewSessionDraft({ directoryOverride: worktreePath, preserveDirectoryOverride: true });
         }}
       />
 

@@ -32,6 +32,7 @@ import { useFeatureFlagsStore } from '@/stores/useFeatureFlagsStore';
 import { useGitHubAuthStore } from '@/stores/useGitHubAuthStore';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { ContextUsageDisplay } from '@/components/ui/ContextUsageDisplay';
+import { WindowsWindowControls } from '@/components/desktop/WindowsWindowControls';
 import { UpdateDialog } from '@/components/ui/UpdateDialog';
 import { useDeviceInfo, useTabletStandalonePwaRuntime } from '@/lib/device';
 import { cn, hasModifier } from '@/lib/utils';
@@ -41,7 +42,9 @@ import { formatQuotaValueLabel, formatQuotaResetLabel, formatWindowLabel, QUOTA_
 import { UsageProgressBar } from '@/components/sections/usage/UsageProgressBar';
 import { PaceIndicator } from '@/components/sections/usage/PaceIndicator';
 import { updateDesktopSettings } from '@/lib/persistence';
+import { formatTimeForPreference } from '@/lib/timeFormat';
 import { eventMatchesShortcut, formatShortcutForDisplay, getEffectiveShortcutCombo } from '@/lib/shortcuts';
+import type { TimeFormatPreference } from '@/stores/useUIStore';
 import {
   getAllModelFamilies,
   getDisplayModelName,
@@ -122,83 +125,6 @@ const HeaderIconActionButton = React.memo(function HeaderIconActionButton({
         <p>{title}</p>
       </TooltipContent>
     </Tooltip>
-  );
-});
-
-type WindowsWindowControlsProps = {
-  visible: boolean;
-};
-
-const WindowsWindowControls = React.memo(function WindowsWindowControls({ visible }: WindowsWindowControlsProps) {
-  const { t } = useI18n();
-  const [isMaximized, setIsMaximized] = React.useState(false);
-
-  useEffect(() => {
-    if (!visible) {
-      return;
-    }
-
-    let disposed = false;
-    void invokeDesktop<{ maximized?: boolean }>('desktop_get_current_window_state')
-      .then((state) => {
-        if (!disposed) {
-          setIsMaximized(Boolean(state?.maximized));
-        }
-      })
-      .catch(() => {});
-
-    const handleMaximizedChange = (event: Event) => {
-      const detail = (event as CustomEvent<{ maximized?: boolean }>).detail;
-      setIsMaximized(Boolean(detail?.maximized));
-    };
-
-    window.addEventListener('openchamber:window-maximized-changed', handleMaximizedChange);
-    return () => {
-      disposed = true;
-      window.removeEventListener('openchamber:window-maximized-changed', handleMaximizedChange);
-    };
-  }, [visible]);
-
-  if (!visible) {
-    return null;
-  }
-
-  const buttonClassName = 'app-region-no-drag inline-flex h-12 w-11 items-center justify-center text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary';
-
-  return (
-    <div className="app-region-no-drag -mr-3 ml-2 flex h-12 shrink-0 items-center" aria-label={t('header.windowControls.groupAria')}>
-      <button
-        type="button"
-        className={buttonClassName}
-        onClick={() => { void invokeDesktop('desktop_minimize_current_window'); }}
-        title={t('header.windowControls.minimize')}
-        aria-label={t('header.windowControls.minimize')}
-      >
-        <Icon name="subtract" className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        className={buttonClassName}
-        onClick={() => {
-          void invokeDesktop<{ maximized?: boolean }>('desktop_toggle_current_window_maximized')
-            .then((state) => setIsMaximized(Boolean(state?.maximized)))
-            .catch(() => {});
-        }}
-        title={isMaximized ? t('header.windowControls.restore') : t('header.windowControls.maximize')}
-        aria-label={isMaximized ? t('header.windowControls.restore') : t('header.windowControls.maximize')}
-      >
-        <Icon name={isMaximized ? 'fullscreen-exit' : 'checkbox-blank'} className="h-3.5 w-3.5" />
-      </button>
-      <button
-        type="button"
-        className={cn(buttonClassName, 'hover:bg-status-error hover:text-status-error-foreground')}
-        onClick={() => { void invokeDesktop('desktop_close_current_window'); }}
-        title={t('header.windowControls.close')}
-        aria-label={t('header.windowControls.close')}
-      >
-        <Icon name="close" className="h-4 w-4" />
-      </button>
-    </div>
   );
 });
 
@@ -356,6 +282,7 @@ type DesktopServicesMenuProps = {
   remoteUpdateError: string | null;
   onOpenRemoteUpdate: () => void;
   showPredValues: boolean;
+  timeFormatPreference: TimeFormatPreference;
 };
 
 const DesktopServicesMenu = React.memo(function DesktopServicesMenu({
@@ -391,6 +318,7 @@ const DesktopServicesMenu = React.memo(function DesktopServicesMenu({
   remoteUpdateError,
   onOpenRemoteUpdate,
   showPredValues,
+  timeFormatPreference,
 }: DesktopServicesMenuProps) {
   const { t } = useI18n();
   return (
@@ -511,7 +439,7 @@ const DesktopServicesMenu = React.memo(function DesktopServicesMenu({
             <div className="flex items-center justify-between gap-3 border-b border-[var(--interactive-border)] px-4 py-2.5">
               <div className="flex min-w-0 items-baseline gap-2">
                 <span className="typography-ui-header font-semibold text-foreground">{t('header.services.rateLimits')}</span>
-                <span className="truncate typography-micro text-muted-foreground">{formatTime(quotaLastUpdated)}</span>
+                <span className="truncate typography-micro text-muted-foreground">{formatTime(quotaLastUpdated, timeFormatPreference)}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="h-7 w-[10.5rem]">
@@ -572,7 +500,7 @@ const DesktopServicesMenu = React.memo(function DesktopServicesMenu({
                                 : calculateExpectedUsagePercent(paceInfo.elapsedRatio))
                             : null;
                           const metricLabel = formatQuotaValueLabel(window.valueLabel, displayPercent);
-                          const resetLabel = formatQuotaResetLabel(window.resetAt, window.resetAfterFormatted ?? window.resetAtFormatted);
+                          const resetLabel = formatQuotaResetLabel(window.resetAt, window.resetAfterFormatted ?? window.resetAtFormatted, timeFormatPreference);
                           return (
                             <div key={`${group.providerId}-${label}`} className="flex flex-col gap-1.5">
                               <div className="flex min-w-0 items-center justify-between gap-3">
@@ -714,13 +642,10 @@ const formatCompactHeaderLabel = (value: string): string => {
   return trimmed.length > 12 ? `${trimmed.slice(0, 9).trimEnd()}...` : trimmed;
 };
 
-const formatTime = (timestamp: number | null) => {
+const formatTime = (timestamp: number | null, timeFormatPreference: 'auto' | '12h' | '24h') => {
   if (!timestamp) return '-';
   try {
-    return new Date(timestamp).toLocaleTimeString(undefined, {
-      hour: 'numeric',
-      minute: '2-digit',
-    });
+    return formatTimeForPreference(timestamp, timeFormatPreference, { fallback: '-' });
   } catch {
     return '-';
   }
@@ -791,6 +716,7 @@ export const Header: React.FC<HeaderProps> = ({
   const activeMainTab = useUIStore((state) => state.activeMainTab);
   const setActiveMainTab = useUIStore((state) => state.setActiveMainTab);
   const shortcutOverrides = useUIStore((state) => state.shortcutOverrides);
+  const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
 
   const getCurrentModel = useConfigStore((state) => state.getCurrentModel);
   const runtimeApis = useRuntimeAPIs();
@@ -1293,13 +1219,16 @@ export const Header: React.FC<HeaderProps> = ({
 
   const worktreeBadge = React.useMemo(() => {
     if (!worktreeAttachment) return null;
-    return formatSessionWorktreeBadge(worktreeAttachment);
-  }, [worktreeAttachment]);
+    return formatSessionWorktreeBadge(worktreeAttachment, {
+      pending: t('gitView.empty.worktreeSetupInProgress'),
+    });
+  }, [t, worktreeAttachment]);
 
   const worktreeBadgeKind = React.useMemo(() => {
     if (!worktreeAttachment) return null;
     if (worktreeAttachment.legacy) return 'legacy';
     if (worktreeAttachment.degraded) return 'degraded';
+    if (worktreeAttachment.worktreeStatus === 'pending') return 'pending';
     if (worktreeAttachment.worktreeStatus === 'missing') return 'missing';
     if (worktreeAttachment.worktreeStatus === 'invalid') return 'invalid';
     if (worktreeAttachment.attentionReason) return 'attention';
@@ -1796,6 +1725,7 @@ export const Header: React.FC<HeaderProps> = ({
         { id: 'files', label: t('layout.mainTab.files'), icon: "folder-6" },
         { id: 'terminal', label: t('layout.mainTab.terminal'), icon: "terminal-box" },
         { id: 'context', label: t('layout.mainTab.context'), icon: "file-list-2" },
+        { id: 'diagram', label: t('layout.mainTab.diagram'), icon: 'file' },
       );
 
       return base;
@@ -2089,6 +2019,7 @@ export const Header: React.FC<HeaderProps> = ({
         remoteUpdateChecking={remoteUpdateChecking}
         remoteUpdateError={remoteUpdateError}
         onOpenRemoteUpdate={openRemoteInstanceUpdate}
+        timeFormatPreference={timeFormatPreference}
       />
       <HeaderIconActionButton
         title={t('header.actions.terminalPanelWithShortcut', { shortcut: shortcutLabel('toggle_terminal') })}
@@ -2445,7 +2376,7 @@ export const Header: React.FC<HeaderProps> = ({
                           <div className="flex flex-col min-w-0 gap-0.5">
                             <span className="typography-ui-header font-semibold text-foreground">{t('header.services.rateLimits')}</span>
                             <span className="truncate typography-micro text-muted-foreground">
-                              {formatTime(quotaLastUpdated)}
+                              {formatTime(quotaLastUpdated, timeFormatPreference)}
                             </span>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
@@ -2533,7 +2464,7 @@ export const Header: React.FC<HeaderProps> = ({
                                         : calculateExpectedUsagePercent(paceInfo.elapsedRatio))
                                     : null;
                                   const metricLabel = formatQuotaValueLabel(window.valueLabel, displayPercent);
-                                  const resetLabel = formatQuotaResetLabel(window.resetAt, window.resetAfterFormatted ?? window.resetAtFormatted);
+                                  const resetLabel = formatQuotaResetLabel(window.resetAt, window.resetAfterFormatted ?? window.resetAtFormatted, timeFormatPreference);
                                   return (
                                     <div key={`${group.providerId}-${label}`} className="flex flex-col gap-1.5">
                                       <div className="flex min-w-0 items-center justify-between gap-3">
