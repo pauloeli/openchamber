@@ -2,8 +2,8 @@
 import * as gitHttp from './gitApiHttp';
 import { opencodeClient } from './opencode/client';
 import { renderMagicPrompt } from './magicPrompts';
-import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useContextStore } from '@/stores/contextStore';
+import { materializeOpenDraftSession, useSessionUIStore } from '@/sync/session-ui-store';
+import { useSelectionStore } from '@/sync/selection-store';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { getRegisteredRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 
@@ -101,6 +101,24 @@ export async function getGitStatus(directory: string, options?: { mode?: 'light'
   return gitHttp.getGitStatus(directory, options);
 }
 
+export async function resolveGitPrimaryRoot(directory: string): Promise<string> {
+  const result = await gitHttp.resolveGitPrimaryRoot(directory);
+  return result.root;
+}
+
+export async function resolveGitTopLevel(directory: string): Promise<string> {
+  const result = await gitHttp.resolveGitTopLevel(directory);
+  return result.root;
+}
+
+export async function getGitCommitSummaries(
+  directory: string,
+  shas: string[]
+): Promise<Array<{ sha: string; short: string; subject: string }>> {
+  const result = await gitHttp.getGitCommitSummaries(directory, shas);
+  return result.commits;
+}
+
 export async function getGitDiff(directory: string, options: import('./api/types').GetGitDiffOptions): Promise<import('./api/types').GitDiffResponse> {
   const runtime = getRuntimeGit();
   if (runtime) return runtime.getGitDiff(directory, options);
@@ -150,6 +168,24 @@ export async function unstageGitFiles(directory: string, filePaths: string[]): P
   return gitHttp.unstageGitFiles(directory, filePaths);
 }
 
+export async function stageGitHunk(directory: string, filePath: string, patch: string): Promise<void> {
+  const runtime = getRuntimeGit();
+  if (runtime?.stageGitHunk) return runtime.stageGitHunk(directory, filePath, patch);
+  return gitHttp.stageGitHunk(directory, filePath, patch);
+}
+
+export async function unstageGitHunk(directory: string, filePath: string, patch: string): Promise<void> {
+  const runtime = getRuntimeGit();
+  if (runtime?.unstageGitHunk) return runtime.unstageGitHunk(directory, filePath, patch);
+  return gitHttp.unstageGitHunk(directory, filePath, patch);
+}
+
+export async function revertGitHunk(directory: string, filePath: string, patch: string): Promise<void> {
+  const runtime = getRuntimeGit();
+  if (runtime?.revertGitHunk) return runtime.revertGitHunk(directory, filePath, patch);
+  return gitHttp.revertGitHunk(directory, filePath, patch);
+}
+
 export async function isLinkedWorktree(directory: string): Promise<boolean> {
   const runtime = getRuntimeGit();
   if (runtime) return runtime.isLinkedWorktree(directory);
@@ -181,11 +217,7 @@ export async function generateCommitMessage(
 ): Promise<{ message: import('./api/types').GeneratedCommitMessage }> {
   const startedAt = Date.now();
   void options;
-  const generationSession = resolveSessionGenerationContext();
-
-  if (!generationSession) {
-    throw new Error('Select existing session for generation');
-  }
+  const generationSession = await resolveGenerationSessionContext();
 
   console.info('[git-generation][browser] request', {
     transport: 'session',
@@ -247,10 +279,7 @@ export async function generatePullRequestDescription(
   payload: { base: string; head: string; context?: string; zenModel?: string; providerId?: string; modelId?: string }
 ): Promise<import('./api/types').GeneratedPullRequestDescription> {
   const startedAt = Date.now();
-  const generationSession = resolveSessionGenerationContext();
-  if (!generationSession) {
-    throw new Error('Select existing session for generation');
-  }
+  const generationSession = await resolveGenerationSessionContext();
 
   const commitLog = await getGitLog(directory, {
     from: payload.base,
@@ -351,19 +380,65 @@ type SessionGenerationContext = {
   variant?: string;
 };
 
+const GENERATION_CONFIG_ERROR = 'No default provider or model configured. Please select a provider and model in settings first.';
+
+async function resolveGenerationSessionContext(): Promise<SessionGenerationContext> {
+  const activeSession = resolveSessionGenerationContext();
+  if (activeSession) {
+    return activeSession;
+  }
+
+  const draft = useSessionUIStore.getState().newSessionDraft;
+  if (!draft?.open) {
+    throw new Error('Select existing session for generation');
+  }
+
+  const config = useConfigStore.getState();
+  if (!config.currentProviderId || !config.currentModelId) {
+    throw new Error(GENERATION_CONFIG_ERROR);
+  }
+
+  const createdDraftSession = await materializeOpenDraftSession({
+    providerID: config.currentProviderId,
+    modelID: config.currentModelId,
+    agent: config.currentAgentName || undefined,
+    variant: config.currentVariant || undefined,
+  });
+
+  if (!createdDraftSession) {
+    const retry = resolveSessionGenerationContext();
+    if (retry) {
+      return retry;
+    }
+    throw new Error('Failed to create session for generation');
+  }
+
+  return {
+    sessionId: createdDraftSession.sessionId,
+    providerID: config.currentProviderId,
+    modelID: config.currentModelId,
+    agent: createdDraftSession.agent,
+    variant: config.currentVariant || undefined,
+  };
+}
+
 const resolveSessionGenerationContext = (): SessionGenerationContext | null => {
   const sessionId = useSessionUIStore.getState().currentSessionId;
   if (!sessionId) {
     return null;
   }
 
-  const context = useContextStore.getState();
+  const selection = useSelectionStore.getState();
   const config = useConfigStore.getState();
+  const lastChoice = useSessionUIStore.getState().getLastUserChoice(sessionId);
 
-  const agent = context.getSessionAgentSelection(sessionId) || config.currentAgentName || undefined;
-  const sessionModel = context.getSessionModelSelection(sessionId);
-  const agentModel = agent ? context.getAgentModelForSession(sessionId, agent) : null;
-  const selectedModel = agentModel || sessionModel || (config.currentProviderId && config.currentModelId
+  const agent = selection.getSessionAgentSelection(sessionId) || lastChoice?.agent || config.currentAgentName || undefined;
+  const sessionModel = selection.getSessionModelSelection(sessionId);
+  const agentModel = agent ? selection.getAgentModelForSession(sessionId, agent) : null;
+  const lastChoiceModel = lastChoice?.providerID && lastChoice.modelID
+    ? { providerId: lastChoice.providerID, modelId: lastChoice.modelID }
+    : null;
+  const selectedModel = agentModel || sessionModel || lastChoiceModel || (config.currentProviderId && config.currentModelId
     ? { providerId: config.currentProviderId, modelId: config.currentModelId }
     : null);
 
@@ -371,10 +446,18 @@ const resolveSessionGenerationContext = (): SessionGenerationContext | null => {
     return null;
   }
 
-  const agentVariant = agent
-    ? context.getAgentModelVariantForSession(sessionId, agent, selectedModel.providerId, selectedModel.modelId)
+  const selectionVariant = agent
+    ? selection.getAgentModelVariantForSession(sessionId, agent, selectedModel.providerId, selectedModel.modelId)
     : undefined;
-  const variant = agentVariant || config.currentVariant || undefined;
+  const lastChoiceVariant = lastChoiceModel
+    && lastChoiceModel.providerId === selectedModel.providerId
+    && lastChoiceModel.modelId === selectedModel.modelId
+      ? lastChoice?.variant
+      : undefined;
+  const configVariant = config.currentProviderId === selectedModel.providerId && config.currentModelId === selectedModel.modelId
+    ? config.currentVariant
+    : undefined;
+  const variant = selectionVariant || lastChoiceVariant || configVariant || undefined;
 
   return {
     sessionId,

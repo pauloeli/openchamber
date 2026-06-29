@@ -2,7 +2,6 @@ import React from 'react';
 import type { Message, Part } from '@opencode-ai/sdk/v2';
 import { useShallow } from 'zustand/react/shallow';
 
-import { defaultCodeDark, defaultCodeLight } from '@/lib/codeTheme';
 import { MessageFreshnessDetector } from '@/lib/messageFreshness';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useFeatureFlagsStore } from '@/stores/useFeatureFlagsStore';
@@ -12,7 +11,6 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSelectionStore } from '@/sync/selection-store';
 import { useDeviceInfo } from '@/lib/device';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
-import { generateSyntaxTheme } from '@/lib/theme/syntaxThemeGenerator';
 import { cn } from '@/lib/utils';
 
 import type { AnimationHandlers, ContentChangeReason } from '@/hooks/useChatAutoFollow';
@@ -25,6 +23,7 @@ import { filterVisibleParts, normalizeParts } from './message/partUtils';
 import { normalizeUserDisplayParts } from './message/normalizeUserDisplayParts';
 import { flattenAssistantTextParts } from '@/lib/messages/messageText';
 import { isLikelyProviderAuthFailure, PROVIDER_AUTH_FAILURE_MESSAGE } from '@/lib/messages/providerAuthError';
+import { getProviderModelDisplayName } from '@/lib/modelDisplay';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import type { TurnGroupingContext } from './lib/turns/types';
 import { copyTextToClipboard } from '@/lib/clipboard';
@@ -168,7 +167,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         streamPerfCount('ui.chat_message.render.streaming');
     }
 
-    const providers = useConfigStore.getState().providers;
+    const providers = useConfigStore((state) => state.providers);
     const { showReasoningTraces, stickyUserHeader, chatRenderMode, showExpandedBashTools, showExpandedEditTools } = useUIStore(
         useShallow((state) => ({
             showReasoningTraces: state.showReasoningTraces,
@@ -363,17 +362,10 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     const modelName = React.useMemo(() => {
         if (isUser) return undefined;
 
-        if (providerID && modelID && providers.length > 0) {
-            const provider = providers.find((p) => p.id === providerID);
-            if (provider?.models && Array.isArray(provider.models)) {
-                const model = provider.models.find((m: Record<string, unknown>) => (m as Record<string, unknown>).id === modelID);
-                const modelObj = model as Record<string, unknown> | undefined;
-                const name = modelObj?.name;
-                return typeof name === 'string' ? name : undefined;
-            }
-        }
-
-        return undefined;
+        const provider = providerID && providers.length > 0
+            ? providers.find((p) => p.id === providerID)
+            : undefined;
+        return getProviderModelDisplayName(provider, modelID) || undefined;
     }, [isUser, providerID, modelID, providers]);
 
     const modelHasVariants = React.useMemo(() => {
@@ -553,13 +545,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         }
         return false;
     }, [themeVariant]);
-
-    const syntaxTheme = React.useMemo(() => {
-        if (currentTheme) {
-            return generateSyntaxTheme(currentTheme);
-        }
-        return isDarkTheme ? defaultCodeDark : defaultCodeLight;
-    }, [currentTheme, isDarkTheme]);
 
     const shouldAnimateMessage = React.useMemo(() => {
         if (isUser) return false;
@@ -1032,7 +1017,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                                 isUser={isUser}
                                                 isMessageCompleted={isMessageCompleted}
                                                 messageFinish={messageFinish}
-                                                syntaxTheme={syntaxTheme}
                                                  isMobile={isMobile}
                                                  alwaysShowActions={alwaysShowMessageActions}
                                                  hasTouchInput={hasTouchInput}
@@ -1066,7 +1050,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                                 isUser={isUser}
                                                 isMessageCompleted={isMessageCompleted}
                                                 messageFinish={messageFinish}
-                                                syntaxTheme={syntaxTheme}
                                                  isMobile={isMobile}
                                                  alwaysShowActions={alwaysShowMessageActions}
                                                  hasTouchInput={hasTouchInput}
@@ -1119,7 +1102,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                 messageFinish={messageFinish}
                                 messageCompletedAt={messageCompletedAt ?? undefined}
                                 messageCreatedAt={messageCreatedAt ?? undefined}
-                                syntaxTheme={syntaxTheme}
                                  isMobile={isMobile}
                                  alwaysShowActions={alwaysShowMessageActions}
                                  hasTouchInput={hasTouchInput}
@@ -1152,7 +1134,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                 <ToolOutputDialog
                     popup={popupContent}
                     onOpenChange={handlePopupChange}
-                    syntaxTheme={syntaxTheme}
                     isMobile={isMobile}
                 />
             </React.Suspense>
